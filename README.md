@@ -31,6 +31,30 @@ cd mace-ft-tutorial
 
 Refer to [`setup.md`](./setup.md) for installation instructions and dependencies.
 
+## **Runnable Paper Examples**
+
+Two paper case studies have self-contained command-line examples in this repo:
+
+- **A. Li10GeP2S12**: [`examples/LiGePS-SSE-PBE`](./examples/LiGePS-SSE-PBE)
+  prepares LGPS `extxyz` train/test data and fine-tunes MACE with the paper's
+  optimized LGPS setting (`forces_weight=100`, `lr=0.001`,
+  `ema_decay=0.999`).
+- **D. Graphene-water interface**:
+  [`examples/graphene-water`](./examples/graphene-water) fine-tunes on the
+  prepared interface dataset, runs 300 K ASE/Langevin MD, and analyzes the
+  oxygen density profile used to estimate the graphene-water distance.
+
+After activating an environment with the required Python dependencies, quick
+smoke tests are:
+
+```bash
+cd examples/LiGePS-SSE-PBE
+python3 prepare_ligps_data.py --max-frames 20
+
+cd ../graphene-water
+python3 run.py --config graphene-128.xyz --steps 10 --optimize-steps 0 --device cpu
+```
+
 
 ## **Citations**  
 If you use the foundation models directly, please cite:  

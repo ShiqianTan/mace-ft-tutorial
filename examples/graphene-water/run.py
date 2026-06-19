@@ -1,92 +1,164 @@
+#!/usr/bin/env python3
+"""Run graphene-water MACE MD with ASE.
 
-# # installation
-# module avail cuda
-# conda activate mace
-# pip install cuequivariance cuequivariance-torch cuequivariance-ops-torch-cu12
-# cd mace
-# pip install .
+Defaults follow the tutorial case: 300 K Langevin dynamics with a 1 fs time
+step for 10000 steps. Use fewer steps for a smoke test.
+"""
 
-import os
+from __future__ import annotations
+
+import argparse
 import json
 import time
-from ase.io import read, write
+from pathlib import Path
+
 from ase import units
+from ase.io import read, write
 from ase.io.trajectory import Trajectory
 from ase.md.langevin import Langevin
 from ase.optimize import LBFGS
 from mace.calculators import MACECalculator
 
-# two MACE models
-mace_models = {
-    "mace-ft": MACECalculator(model_paths="mace-ft-tutorial-main-3.model", enable_cueq=True, device="cuda"),
-    "mace-mp-0b3": MACECalculator(model_paths="mace-ft-tutorial-main-3.model", enable_cueq=False, device="cuda")
-}
 
-# three configurations
-config_files = {
-    "graphene-128": "graphene-128.xyz",
-    "graphene-372": "graphene-372.xyz",
-    "graphene-1038": "graphene-1038.xyz"
-}
+def default_device() -> str:
+    try:
+        import torch
 
-Temp = 300
-friction = 0.01
-time_step = 1  # fs
-steps = 10000
-seed = "results"
-timing_result = {}
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
-# main loop
-for mace_name, mace_calculator in mace_models.items():
-    for config_name, config_file in config_files.items():
-        print(f"Running MD for {config_name} with {mace_name}...")
 
-        # path
-        res_path = os.path.join(seed)
-        if not os.path.exists(res_path):
-            os.makedirs(res_path)
-        traj_name_traj = os.path.join(res_path, f"{config_name}_{mace_name}_{Temp}_{steps}.traj")
-        traj_name_xyz = os.path.join(res_path, f"{config_name}_{mace_name}_{Temp}_{steps}.xyz")
+def parse_model(value: str) -> tuple[str, Path]:
+    if "=" not in value:
+        path = Path(value)
+        return path.stem, path
+    name, path = value.split("=", 1)
+    return name, Path(path)
 
-        # read configuration
-        at = read(config_file)
-        at.calc = mace_calculator
 
-        # geometry optimization
-        gr = LBFGS(atoms=at)
-        gr.run(fmax=0.01, steps=100)
+def print_energy(atoms) -> None:
+    epot = atoms.get_potential_energy() / len(atoms)
+    ekin = atoms.get_kinetic_energy() / len(atoms)
+    temp = ekin / (1.5 * units.kB)
+    print(
+        f"Energy per atom: Epot={epot:.6f} eV "
+        f"Ekin={ekin:.6f} eV T={temp:.1f} K Etot={epot + ekin:.6f} eV"
+    )
 
-        # set up MD
-        dyn = Langevin(at, time_step * units.fs, Temp * units.kB, friction)
 
-        def printenergy(a=at):
-            epot = a.get_potential_energy() / len(a)
-            ekin = a.get_kinetic_energy() / len(a)
-            print(f"Energy per atom: Epot = {epot:.3f} eV  Ekin = {ekin:.3f} eV "
-                  f"(T = {ekin / (1.5 * units.kB):.0f} K)  Etot = {epot + ekin:.3f} eV")
+def main() -> None:
+    here = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--model",
+        action="append",
+        default=None,
+        help="Model as name=/path/model or /path/model. May be repeated.",
+    )
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        help="Input xyz file. May be repeated.",
+    )
+    parser.add_argument("--output-dir", type=Path, default=here / "results")
+    parser.add_argument("--device", default=default_device())
+    parser.add_argument("--enable-cueq", action="store_true")
+    parser.add_argument("--temperature", type=float, default=300.0)
+    parser.add_argument("--friction", type=float, default=0.01)
+    parser.add_argument("--time-step-fs", type=float, default=1.0)
+    parser.add_argument("--steps", type=int, default=10000)
+    parser.add_argument("--log-interval", type=int, default=100)
+    parser.add_argument("--optimize-steps", type=int, default=100)
+    parser.add_argument("--fmax", type=float, default=0.01)
+    args = parser.parse_args()
 
-        dyn.attach(printenergy, interval=100)
-        traj = Trajectory(traj_name_traj, 'w', at)
-        dyn.attach(traj.write, interval=100)
+    if args.model:
+        model_specs = args.model
+    elif args.device == "cpu":
+        model_specs = [f"mace-mpa0={here / '../../models/mace-mpa-0-medium.model'}"]
+        print("No --model supplied on CPU; using the CPU-loadable MACE-MPA-0 foundation model.")
+    else:
+        model_specs = [f"mace-ft={here / 'mace-ft-tutorial-main-3.model'}"]
+    config_paths = [Path(p) for p in (args.config or [here / "graphene-372.xyz"])]
 
-        # record time
-        start_time = time.time()
-        dyn.run(steps)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    timing_result: dict[str, float] = {}
 
-        # write trajectory to xyz
-        ats = read(traj_name_traj, index=":")
-        write(traj_name_xyz, ats)
+    for model_arg in model_specs:
+        model_name, model_path = parse_model(model_arg)
+        if not model_path.is_absolute():
+            model_path = (here / model_path).resolve()
+        if not model_path.exists():
+            raise SystemExit(f"Missing model file: {model_path}")
 
-        # record timing result
-        timing_result[f"{config_name}_{mace_name}"] = elapsed_time
-        print(f"Finished {config_name} with {mace_name} in {elapsed_time:.2f} seconds.\n")
+        try:
+            calculator = MACECalculator(
+                model_paths=str(model_path),
+                enable_cueq=args.enable_cueq,
+                device=args.device,
+            )
+        except NotImplementedError as exc:
+            if args.device == "cpu" and "CUDA" in str(exc):
+                raise SystemExit(
+                    "This checkpoint appears to contain CUDA-serialized TorchScript "
+                    "state and cannot be loaded in a CPU-only PyTorch build. Use "
+                    "--model mace-mpa0=../../models/mace-mpa-0-medium.model for a "
+                    "CPU smoke test, run this checkpoint on a CUDA machine, or "
+                    "fine-tune/export a CPU-loadable model in this environment."
+                ) from exc
+            raise
 
-# save all timing to JSON file
-json_file = os.path.join(seed, f"timing_results_{Temp}_{steps}.json")
-with open(json_file, "w") as f:
-    json.dump(timing_result, f, indent=2)
+        for config_path in config_paths:
+            if not config_path.is_absolute():
+                config_path = (here / config_path).resolve()
+            if not config_path.exists():
+                raise SystemExit(f"Missing configuration file: {config_path}")
 
-print("All simulations completed. Timing results saved to", json_file)
+            config_name = config_path.stem
+            run_name = f"{config_name}_{model_name}_{int(args.temperature)}K_{args.steps}"
+            traj_path = args.output_dir / f"{run_name}.traj"
+            xyz_path = args.output_dir / f"{run_name}.xyz"
 
+            print(f"Running {run_name} on {args.device}")
+            atoms = read(config_path)
+            atoms.calc = calculator
+
+            if args.optimize_steps > 0:
+                opt = LBFGS(atoms)
+                opt.run(fmax=args.fmax, steps=args.optimize_steps)
+
+            dyn = Langevin(
+                atoms,
+                args.time_step_fs * units.fs,
+                args.temperature * units.kB,
+                args.friction,
+            )
+            dyn.attach(lambda atoms=atoms: print_energy(atoms), interval=args.log_interval)
+            traj = Trajectory(traj_path, "w", atoms)
+            dyn.attach(traj.write, interval=args.log_interval)
+
+            start = time.time()
+            traj.write()
+            dyn.run(args.steps)
+            if args.steps % args.log_interval != 0:
+                traj.write()
+            traj.close()
+            elapsed = time.time() - start
+
+            trajectory_frames = read(traj_path, index=":")
+            write(xyz_path, trajectory_frames)
+            timing_result[run_name] = elapsed
+            print(f"Finished {run_name} in {elapsed:.2f} s")
+            print(f"Wrote {traj_path}")
+            print(f"Wrote {xyz_path}")
+
+    json_path = args.output_dir / f"timing_results_{int(args.temperature)}K_{args.steps}.json"
+    with json_path.open("w", encoding="utf-8") as handle:
+        json.dump(timing_result, handle, indent=2)
+    print(f"Timing results saved to {json_path}")
+
+
+if __name__ == "__main__":
+    main()

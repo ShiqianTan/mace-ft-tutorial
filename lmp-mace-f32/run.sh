@@ -1,8 +1,18 @@
 #!/bin/bash
-#SBTACH -p cpu-5218
+#SBATCH -p cpu-5218
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=40
+#SBATCH --ntasks-per-node=1
 
-module load lammps/28Mar2023
+set -euo pipefail
 
-lmp -k on g 1 -sf kk -in mace-lmp.in  
+LMP_BIN="${LMP_BIN:-lmp}"
+INPUT="${INPUT:-mace-lmp.in}"
+USE_KOKKOS="${USE_KOKKOS:-1}"
+
+cd "$(dirname "$0")"
+
+if [[ "$USE_KOKKOS" == "1" ]]; then
+  "$LMP_BIN" -k on g 1 -sf kk -in "$INPUT"
+else
+  "$LMP_BIN" -in "$INPUT"
+fi

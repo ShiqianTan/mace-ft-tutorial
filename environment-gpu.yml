@@ -1,0 +1,8 @@
+name: mace-ft-gpu
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -r requirements-gpu.txt

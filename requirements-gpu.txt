@@ -1,0 +1,17 @@
+# Install PyTorch first with the CUDA wheel index for your cluster, then install
+# this file. Example for CUDA 12.1:
+#   python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+mace-torch
+ase
+dpdata
+numpy
+scipy
+matplotlib
+pandas
+h5py
+
+# Optional CUDA acceleration for MACE inference/training when compatible with
+# your CUDA/PyTorch build:
+# cuequivariance
+# cuequivariance-torch
+# cuequivariance-ops-torch-cu12

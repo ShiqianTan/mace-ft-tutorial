@@ -13,7 +13,7 @@ neigh_modify	 every 20  delay 0  check no
 #  potentials
 read_data   graphene-water.data
 pair_style mace no_domain_decomposition
-pair_coeff * * /public/home/zkh/lmp-mace-kk/mace-ft-tutorial-main-3_compiled_f32.model-lammps.pt  C O H
+pair_coeff * * mace-ft-tutorial-main-3_compiled_f32.model-lammps.pt  C O H
 
 
 
